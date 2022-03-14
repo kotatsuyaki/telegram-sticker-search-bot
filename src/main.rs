@@ -235,6 +235,113 @@ async fn command_handler(
             )
             .await?;
         }
+        Command::Untag { text } => {
+            let re_msg: &Message = match message.reply_to_message() {
+                Some(m) => m,
+                None => {
+                    warn!("No reply to message");
+                    return Ok(());
+                }
+            };
+
+            // only process tag requests from known senders
+            let sender = match message.from() {
+                Some(user) => user,
+                None => {
+                    reply_msg(bot, message, strings::SENDER_UNKNOWN).await?;
+                    return Ok(());
+                }
+            };
+
+            // check if sender is known
+            let db_user = model::user::Entity::find()
+                .filter(model::user::Column::UserId.eq(sender.id))
+                .one(&store.db)
+                .await?;
+            let db_user = if let Some(u) = db_user {
+                u
+            } else {
+                reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
+                return Ok(());
+            };
+
+            // check if sender is allowed to tag
+            if db_user.allowed == false {
+                reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
+                return Ok(());
+            }
+
+            /* Proceed to tag */
+
+            // prepare data to be inserted
+            let re_sticker: &Sticker = match re_msg.sticker() {
+                Some(s) => s,
+                None => {
+                    warn!("No reply to sticker");
+                    return Ok(());
+                }
+            };
+
+            let file_id = &re_sticker.file_id;
+            let untags: Vec<_> = text.trim().split_whitespace().collect();
+
+            let sticker = model::sticker::Entity::find()
+                .filter(model::sticker::Column::FileId.eq(file_id.clone()))
+                .one(&store.db)
+                .await?;
+            let sticker_id = match sticker {
+                Some(sticker) => sticker.id,
+                None => {
+                    reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
+                    return Ok(());
+                }
+            };
+
+            model::tagged_sticker::Entity::delete_many()
+                .filter(model::tagged_sticker::Column::StickerId.eq(sticker_id))
+                .filter(model::tagged_sticker::Column::Tag.is_in(untags))
+                .exec(&store.db)
+                .await?;
+
+            reply_msg(bot, message, strings::UNTAG_SUCCESS).await?;
+        }
+        Command::ListTags => {
+            let re_msg: &Message = match message.reply_to_message() {
+                Some(m) => m,
+                None => {
+                    warn!("No reply to message");
+                    return Ok(());
+                }
+            };
+
+            let re_sticker: &Sticker = match re_msg.sticker() {
+                Some(s) => s,
+                None => {
+                    warn!("No reply to sticker");
+                    return Ok(());
+                }
+            };
+            let file_id = &re_sticker.file_id;
+            let sticker = model::sticker::Entity::find()
+                .filter(model::sticker::Column::FileId.eq(file_id.clone()))
+                .one(&store.db)
+                .await?;
+            let sticker_id = match sticker {
+                Some(sticker) => sticker.id,
+                None => {
+                    reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
+                    return Ok(());
+                }
+            };
+
+            let tagged_stickers = model::tagged_sticker::Entity::find()
+                .filter(model::tagged_sticker::Column::StickerId.eq(sticker_id))
+                .all(&store.db)
+                .await?;
+            let tags = tagged_stickers.into_iter().map(|ts| ts.tag).join(", ");
+
+            reply_msg(bot, message, tags).await?;
+        }
         Command::Register => {
             // only process register requests from known senders
             let sender = match message.from() {
@@ -393,7 +500,7 @@ async fn reply_msg_with_parse_mode<S: AsRef<str>>(
 #[derive(BotCommand, Debug)]
 #[command(rename = "lowercase", description = "Commands:")]
 enum Command {
-    #[command(description = "tag a sticker with text description.")]
+    #[command(description = "tag a sticker with text description")]
     Tag { text: String },
 
     #[command(description = "register self as a tagger")]
@@ -404,6 +511,12 @@ enum Command {
 
     #[command(description = "get help message")]
     Help,
+
+    #[command(description = "remove a tag from a sticker")]
+    Untag { text: String },
+
+    #[command(description = "list all tags associated with a sticker")]
+    ListTags,
 }
 
 #[derive(Debug)]

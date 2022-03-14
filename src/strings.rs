@@ -8,3 +8,5 @@ pub const WRONG_ARGNUM: &str = "Wrong number of arguments";
 pub const NO_PERM: &str = "*You're not supposed to do that*";
 pub const NO_STICKER_SET: &str =
     "Tagging is only supported for stickers that are contained in sticker sets";
+pub const STICKER_UNTAGGED: &str = "This sticker is not tagged";
+pub const UNTAG_SUCCESS: &str = "Successfully removed the specified tags";
