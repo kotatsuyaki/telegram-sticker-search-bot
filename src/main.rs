@@ -338,6 +338,12 @@ async fn command_handler(
                 .filter(model::tagged_sticker::Column::StickerId.eq(sticker_id))
                 .all(&store.db)
                 .await?;
+
+            if tagged_stickers.is_empty() {
+                reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
+                return Ok(());
+            }
+
             let tags = tagged_stickers.into_iter().map(|ts| ts.tag).join(", ");
 
             reply_msg(bot, message, tags).await?;
