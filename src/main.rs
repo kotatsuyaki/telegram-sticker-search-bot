@@ -41,12 +41,12 @@ async fn main() -> Result<(), BotError> {
 
     // setup handlers
     let inline_handler =
-        Update::filter_inline_query().branch(dptree::endpoint(inline_queries_handler));
+        Update::filter_inline_query().branch(dptree::endpoint(inline_query_handler));
     let cmd_handler = Update::filter_message()
         .filter_command::<Command>()
         .branch(dptree::endpoint(command_handler));
-    let feedback_handler =
-        Update::filter_chosen_inline_result().branch(dptree::endpoint(chosen_result_handler));
+    let feedback_handler = Update::filter_chosen_inline_result()
+        .branch(dptree::endpoint(chosen_inline_result_handler));
 
     let handler = dptree::entry()
         .branch(inline_handler)
@@ -90,7 +90,7 @@ impl DataStore {
     }
 }
 
-async fn chosen_result_handler(
+async fn chosen_inline_result_handler(
     _bot: Bot,
     chosen: ChosenInlineResult,
     store: Arc<DataStore>,
@@ -521,7 +521,7 @@ async fn command_handler(
     Ok(())
 }
 
-async fn inline_queries_handler(
+async fn inline_query_handler(
     bot: Bot,
     update: InlineQuery,
     store: Arc<DataStore>,
