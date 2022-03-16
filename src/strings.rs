@@ -10,3 +10,4 @@ pub const NO_STICKER_SET: &str =
     "Tagging is only supported for stickers that are contained in sticker sets";
 pub const STICKER_UNTAGGED: &str = "This sticker is not tagged";
 pub const UNTAG_SUCCESS: &str = "Successfully removed the specified tags";
+pub const NO_TAGS: &str = "Please supply at least one tag";

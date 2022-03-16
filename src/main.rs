@@ -186,6 +186,11 @@ async fn command_handler(
             let file_id = &re_sticker.file_id;
             let tags: Vec<_> = text.trim().split_whitespace().collect();
 
+            if tags.is_empty() {
+                reply_msg(bot, message, strings::NO_TAGS).await?;
+                return Ok(());
+            }
+
             // ensure that the sticker is indexed
             let inserted_sticker_res =
                 model::sticker::Entity::insert(model::sticker::ActiveModel {
