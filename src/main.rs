@@ -409,7 +409,10 @@ async fn command_handler(
                 }
             };
             let file_unique_id = &re_sticker.file_unique_id;
-            info!("Finding sticker with unique_file_id: {file_unique_id}");
+            info!(
+                "User {username} finding sticker with unique_file_id: {file_unique_id} with /listtags",
+                username = username_of_message(&message, "<unknown>")
+            );
 
             let sticker = model::sticker::Entity::find()
                 .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
@@ -539,7 +542,10 @@ async fn inline_query_handler(
         return Ok(());
     }
 
-    info!("Query: {query_str}");
+    info!(
+        "User {username} query: {query_str}",
+        username = username_of_user(&update.from, "<update>")
+    );
 
     // construct query condition
     let queries = query_str.trim().split_whitespace().collect_vec();
@@ -579,6 +585,11 @@ async fn inline_query_handler(
             InlineQueryResultCachedSticker::new(sticker_id.to_string(), file_id).into()
         })
         .collect::<Vec<InlineQueryResult>>();
+    info!(
+        "Returning {num} results to {username}",
+        num = query_responses.len(),
+        username = username_of_user(&update.from, "<unknown>")
+    );
 
     bot.answer_inline_query(update.id, query_responses)
         .send()
@@ -609,6 +620,13 @@ fn username_of_message<'a>(message: &'a Message, fallback: &'a str) -> &'a str {
     message
         .from()
         .and_then(|u| u.username.as_ref())
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| fallback.as_ref())
+}
+
+fn username_of_user<'a>(user: &'a teloxide::types::User, fallback: &'a str) -> &'a str {
+    user.username
+        .as_ref()
         .map(|s| s.as_str())
         .unwrap_or_else(|| fallback.as_ref())
 }
