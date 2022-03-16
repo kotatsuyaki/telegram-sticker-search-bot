@@ -19,7 +19,12 @@ mod strings;
 
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
+    // initialize logger with sane defaults
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "sticker_search=info,teloxide=error");
+    }
     pretty_env_logger::init();
+
     info!("Starting bot");
 
     let bot = Bot::from_env();
