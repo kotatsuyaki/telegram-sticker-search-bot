@@ -1,3 +1,5 @@
+//! Database type definitions
+
 pub mod sticker {
     use sea_orm::entity::prelude::*;
 
@@ -8,6 +10,8 @@ pub mod sticker {
         pub id: i32,
 
         #[sea_orm(unique)]
+        pub file_unique_id: String,
+
         pub file_id: String,
 
         pub set_name: String,

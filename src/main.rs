@@ -184,6 +184,7 @@ async fn command_handler(
                 }
             };
             let file_id = &re_sticker.file_id;
+            let file_unique_id = &re_sticker.file_unique_id;
             let tags: Vec<_> = text.trim().split_whitespace().collect();
 
             if tags.is_empty() {
@@ -192,8 +193,10 @@ async fn command_handler(
             }
 
             // ensure that the sticker is indexed
+            // NOTE: This is a workaround to implement the "insert if not exists" behavior
             let inserted_sticker_res =
                 model::sticker::Entity::insert(model::sticker::ActiveModel {
+                    file_unique_id: Set(file_unique_id.clone()),
                     file_id: Set(file_id.clone()),
                     set_name: Set(set_name.clone()),
                     popularity: Set(0),
@@ -207,7 +210,7 @@ async fn command_handler(
                 Ok(sticker) => sticker.last_insert_id,
                 Err(_) => {
                     let sticker = model::sticker::Entity::find()
-                        .filter(model::sticker::Column::FileId.eq(file_id.clone()))
+                        .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
                         .one(&store.db)
                         .await?;
                     sticker.ok_or(BotError::NoSuchStickerError)?.id
@@ -227,6 +230,8 @@ async fn command_handler(
             let _insert_res = model::tagged_sticker::Entity::insert_many(tagged_stickers)
                 .exec(&store.db)
                 .await?;
+
+            info!("Tagged sticker with file_unique_id {file_unique_id} in set {set_name} with tags {tags:?}");
 
             // respond to user with what's being tagged
             let tags_joined = tags.iter().join("\n- ");
@@ -287,11 +292,11 @@ async fn command_handler(
                 }
             };
 
-            let file_id = &re_sticker.file_id;
+            let file_unique_id = &re_sticker.file_unique_id;
             let untags: Vec<_> = text.trim().split_whitespace().collect();
 
             let sticker = model::sticker::Entity::find()
-                .filter(model::sticker::Column::FileId.eq(file_id.clone()))
+                .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
                 .one(&store.db)
                 .await?;
             let sticker_id = match sticker {
@@ -326,9 +331,11 @@ async fn command_handler(
                     return Ok(());
                 }
             };
-            let file_id = &re_sticker.file_id;
+            let file_unique_id = &re_sticker.file_unique_id;
+            info!("Finding sticker with unique_file_id: {file_unique_id}");
+
             let sticker = model::sticker::Entity::find()
-                .filter(model::sticker::Column::FileId.eq(file_id.clone()))
+                .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
                 .one(&store.db)
                 .await?;
             let sticker_id = match sticker {
@@ -351,7 +358,7 @@ async fn command_handler(
 
             let tags = tagged_stickers.into_iter().map(|ts| ts.tag).join(", ");
 
-            reply_msg(bot, message, tags).await?;
+            reply_msg(bot, message, format!("Tags on this sticker: {}", tags)).await?;
         }
         Command::Register => {
             // only process register requests from known senders
@@ -437,12 +444,13 @@ async fn inline_queries_handler(
     store: Arc<DataStore>,
 ) -> Result<(), BotError> {
     let query_str = update.query.as_str();
-    info!("Query: {query_str}");
 
     // reject empty queries
     if query_str.trim() == "" {
         return Ok(());
     }
+
+    info!("Query: {query_str}");
 
     // construct query condition
     let queries = query_str.trim().split_whitespace().collect_vec();
