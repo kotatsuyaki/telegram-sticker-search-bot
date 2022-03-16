@@ -26,6 +26,7 @@ async fn main() -> Result<(), BotError> {
     pretty_env_logger::init();
 
     info!("Starting bot");
+    info!("Usage: Set TELOXIDE_TOKEN, STICKERS_SECRET, DB_URL (e.g. postgres://user:pass@host/db)");
 
     let bot = Bot::from_env();
 
