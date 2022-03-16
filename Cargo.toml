@@ -12,8 +12,8 @@ pretty_env_logger = "0.4.0"
 itertools = "0.10"
 chrono = "0.4"
 
-teloxide = { version = "0.7", features = [ "macros" ] }
+teloxide = { version = "0.7", features = [ "rustls", "ctrlc_handler", "dispatching2", "macros", "cache-me" ], default-features = false }
 dptree = "0.1.0"
 html-escape = "0.2.9"
 
-sea-orm = { version = "0.6.0", features = [ "sqlx-postgres", "runtime-tokio-native-tls", "macros" ], default-features = false }
+sea-orm = { version = "0.6.0", features = [ "sqlx-postgres", "runtime-tokio-rustls", "macros" ], default-features = false }
