@@ -19,7 +19,7 @@ mod strings;
 
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
-    teloxide::enable_logging!();
+    pretty_env_logger::init();
     info!("Starting bot");
 
     let bot = Bot::from_env();
@@ -132,7 +132,12 @@ async fn command_handler(
             let re_msg: &Message = match message.reply_to_message() {
                 Some(m) => m,
                 None => {
-                    warn!("No reply to message");
+                    info!(
+                        "/tag command by {} does not reply to a message",
+                        username_of_message(&message, "<unknown>")
+                    );
+
+                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
                     return Ok(());
                 }
             };
@@ -141,6 +146,8 @@ async fn command_handler(
             let sender = match message.from() {
                 Some(user) => user,
                 None => {
+                    info!("Unknown user attempted to use the /tag command");
+
                     reply_msg(bot, message, strings::SENDER_UNKNOWN).await?;
                     return Ok(());
                 }
@@ -154,12 +161,22 @@ async fn command_handler(
             let db_user = if let Some(u) = db_user {
                 u
             } else {
+                info!(
+                    "Unregistered user {} attempted to use the /tag command",
+                    username_of_message(&message, "<unknown>")
+                );
+
                 reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
                 return Ok(());
             };
 
             // check if sender is allowed to tag
             if db_user.allowed == false {
+                info!(
+                    "Non-allowed tagger {} attempted to use the /tag command",
+                    username_of_message(&message, "<unknown>")
+                );
+
                 reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
                 return Ok(());
             }
@@ -170,7 +187,12 @@ async fn command_handler(
             let re_sticker: &Sticker = match re_msg.sticker() {
                 Some(s) => s,
                 None => {
-                    warn!("No reply to sticker");
+                    info!(
+                        "/tag command by {} does not reply to a sticker",
+                        db_user.username
+                    );
+
+                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
                     return Ok(());
                 }
             };
@@ -179,6 +201,8 @@ async fn command_handler(
             let set_name = match &re_sticker.set_name {
                 Some(name) => name,
                 None => {
+                    info!("Sticker {:?} does not have a sticker set", re_sticker);
+
                     reply_msg(bot, message, strings::NO_STICKER_SET).await?;
                     return Ok(());
                 }
@@ -188,6 +212,11 @@ async fn command_handler(
             let tags: Vec<_> = text.trim().split_whitespace().collect();
 
             if tags.is_empty() {
+                info!(
+                    "Tagger {} used /tag command without any tags",
+                    db_user.username
+                );
+
                 reply_msg(bot, message, strings::NO_TAGS).await?;
                 return Ok(());
             }
@@ -231,7 +260,10 @@ async fn command_handler(
                 .exec(&store.db)
                 .await?;
 
-            info!("Tagged sticker with file_unique_id {file_unique_id} in set {set_name} with tags {tags:?}");
+            info!(
+                "{username} tagged sticker with file_unique_id {file_unique_id} in set {set_name} with tags: {tags:?}",
+                username = db_user.username
+            );
 
             // respond to user with what's being tagged
             let tags_joined = tags.iter().join("\n- ");
@@ -249,7 +281,12 @@ async fn command_handler(
             let re_msg: &Message = match message.reply_to_message() {
                 Some(m) => m,
                 None => {
-                    warn!("No reply to message");
+                    info!(
+                        "/tag command by {} does not reply to a message",
+                        username_of_message(&message, "<unknown>")
+                    );
+
+                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
                     return Ok(());
                 }
             };
@@ -258,6 +295,8 @@ async fn command_handler(
             let sender = match message.from() {
                 Some(user) => user,
                 None => {
+                    info!("Unknown user attempted to use the /tag command");
+
                     reply_msg(bot, message, strings::SENDER_UNKNOWN).await?;
                     return Ok(());
                 }
@@ -271,12 +310,22 @@ async fn command_handler(
             let db_user = if let Some(u) = db_user {
                 u
             } else {
+                info!(
+                    "Unregistered user {} attempted to use the /tag command",
+                    username_of_message(&message, "<unknown>")
+                );
+
                 reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
                 return Ok(());
             };
 
             // check if sender is allowed to tag
             if db_user.allowed == false {
+                info!(
+                    "Non-allowed tagger {} attempted to use the /tag command",
+                    username_of_message(&message, "<unknown>")
+                );
+
                 reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
                 return Ok(());
             }
@@ -287,7 +336,12 @@ async fn command_handler(
             let re_sticker: &Sticker = match re_msg.sticker() {
                 Some(s) => s,
                 None => {
-                    warn!("No reply to sticker");
+                    info!(
+                        "/tag command by {} does not reply to a sticker",
+                        db_user.username
+                    );
+
+                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
                     return Ok(());
                 }
             };
@@ -302,24 +356,36 @@ async fn command_handler(
             let sticker_id = match sticker {
                 Some(sticker) => sticker.id,
                 None => {
+                    info!("Tagger {username} used /untag against an unindexed sticker with unique id {file_unique_id}",
+                    username = db_user.username);
+
                     reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
                     return Ok(());
                 }
             };
 
-            model::tagged_sticker::Entity::delete_many()
+            let delete_res = model::tagged_sticker::Entity::delete_many()
                 .filter(model::tagged_sticker::Column::StickerId.eq(sticker_id))
-                .filter(model::tagged_sticker::Column::Tag.is_in(untags))
+                .filter(model::tagged_sticker::Column::Tag.is_in(untags.clone()))
                 .exec(&store.db)
                 .await?;
 
+            info!(
+                "Tagger {username} removed tags {untags:?} from sticker with unique id {file_unique_id} (deleted {rows} rows)",
+                username = db_user.username, rows = delete_res.rows_affected
+            );
             reply_msg(bot, message, strings::UNTAG_SUCCESS).await?;
         }
         Command::ListTags => {
             let re_msg: &Message = match message.reply_to_message() {
                 Some(m) => m,
                 None => {
-                    warn!("No reply to message");
+                    info!(
+                        "User {} used /listtags without replying to a sticker",
+                        username_of_message(&message, "<unknown>")
+                    );
+
+                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
                     return Ok(());
                 }
             };
@@ -327,7 +393,12 @@ async fn command_handler(
             let re_sticker: &Sticker = match re_msg.sticker() {
                 Some(s) => s,
                 None => {
-                    warn!("No reply to sticker");
+                    info!(
+                        "User {} used /listtags command without replying to a sticker",
+                        username_of_message(&message, "<unknown>")
+                    );
+
+                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
                     return Ok(());
                 }
             };
@@ -341,6 +412,11 @@ async fn command_handler(
             let sticker_id = match sticker {
                 Some(sticker) => sticker.id,
                 None => {
+                    info!(
+                        "User {} used /listtags against an unindexed sticker with unique id {file_unique_id}",
+                        username_of_message(&message, "<unknown>")
+                    );
+
                     reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
                     return Ok(());
                 }
@@ -352,11 +428,16 @@ async fn command_handler(
                 .await?;
 
             if tagged_stickers.is_empty() {
+                info!(
+                    "User {} used /listtags against an indexed, but untagged sticker with unique id {file_unique_id}",
+                    username_of_message(&message, "<unknown>")
+                );
+
                 reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
                 return Ok(());
             }
 
-            let tags = tagged_stickers.into_iter().map(|ts| ts.tag).join(", ");
+            let tags = tagged_stickers.into_iter().map(|ts| ts.tag).join(" ");
 
             reply_msg(bot, message, format!("Tags on this sticker: {}", tags)).await?;
         }
@@ -374,6 +455,8 @@ async fn command_handler(
             let username = if let Some(username) = &sender.username {
                 username.clone()
             } else {
+                info!("A user {sender:?} without username attempted to register");
+
                 reply_msg(bot, message, strings::USERNAME_MISSING).await?;
                 return Ok(());
             };
@@ -514,6 +597,14 @@ async fn reply_msg_with_parse_mode<S: AsRef<str>>(
     send_message.parse_mode = parse_mode;
     send_message.send().await?;
     Ok(())
+}
+
+fn username_of_message<'a>(message: &'a Message, fallback: &'a str) -> &'a str {
+    message
+        .from()
+        .and_then(|u| u.username.as_ref())
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| fallback.as_ref())
 }
 
 #[derive(BotCommand, Debug)]

@@ -11,3 +11,4 @@ pub const NO_STICKER_SET: &str =
 pub const STICKER_UNTAGGED: &str = "This sticker is not tagged";
 pub const UNTAG_SUCCESS: &str = "Successfully removed the specified tags";
 pub const NO_TAGS: &str = "Please supply at least one tag";
+pub const NO_REPLY_STICKER: &str = "Please reply to a sticker when using the /tag command";
