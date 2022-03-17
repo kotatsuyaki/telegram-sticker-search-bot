@@ -285,9 +285,9 @@ async fn handle_tag_command(
         .await?;
 
     info!(
-                "{username} tagged sticker with file_unique_id {file_unique_id} in set {set_name} with tags: {tags:?}",
-                username = db_user.username
-            );
+        "{username} tagged sticker with file_unique_id {file_unique_id} in set {set_name} with tags: {tags:?}",
+        username = db_user.username
+    );
 
     // respond to user with what's being tagged
     let tags_joined = tags.iter().join("\n- ");
@@ -388,8 +388,10 @@ async fn handle_untag_command(
     let sticker_id = match sticker {
         Some(sticker) => sticker.id,
         None => {
-            info!("Tagger {username} used /untag against an unindexed sticker with unique id {file_unique_id}",
-                    username = db_user.username);
+            info!(
+                "Tagger {username} used /untag against an unindexed sticker with unique id {file_unique_id}",
+                username = db_user.username
+            );
 
             reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
             return Ok(());
@@ -403,9 +405,9 @@ async fn handle_untag_command(
         .await?;
 
     info!(
-                "Tagger {username} removed tags {untags:?} from sticker with unique id {file_unique_id} (deleted {rows} rows)",
-                username = db_user.username, rows = delete_res.rows_affected
-            );
+        "Tagger {username} removed tags {untags:?} from sticker with unique id {file_unique_id} (deleted {rows} rows)",
+        username = db_user.username, rows = delete_res.rows_affected
+    );
     reply_msg(bot, message, strings::UNTAG_SUCCESS).await?;
 
     Ok(())
@@ -455,9 +457,9 @@ async fn handle_list_tags_command(
         Some(sticker) => sticker.id,
         None => {
             info!(
-                        "User {} used /listtags against an unindexed sticker with unique id {file_unique_id}",
-                        username_of_message(&message, "<unknown>")
-                    );
+                "User {} used /listtags against an unindexed sticker with unique id {file_unique_id}",
+                username_of_message(&message, "<unknown>")
+            );
 
             reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
             return Ok(());
@@ -471,9 +473,9 @@ async fn handle_list_tags_command(
 
     if tagged_stickers.is_empty() {
         info!(
-                    "User {} used /listtags against an indexed, but untagged sticker with unique id {file_unique_id}",
-                    username_of_message(&message, "<unknown>")
-                );
+            "User {} used /listtags against an indexed, but untagged sticker with unique id {file_unique_id}",
+            username_of_message(&message, "<unknown>")
+        );
 
         reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
         return Ok(());
