@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env::vars, sync::Arc};
+use std::{cmp::Reverse, collections::HashMap, env::vars, sync::Arc};
 
 use chrono::Utc;
 use itertools::Itertools;
@@ -8,7 +8,6 @@ use sea_orm::{
     EntityTrait, IntoActiveModel, Order, QueryFilter, QueryOrder, Schema, Set,
 };
 use teloxide::{
-    dispatching2::UpdateFilterExt,
     prelude2::*,
     types::{InlineQueryResult, InlineQueryResultCachedSticker, ParseMode, Sticker},
     utils::command::BotCommand,
@@ -550,25 +549,36 @@ async fn inline_query_handler(
     // construct query condition
     let queries = query_str.trim().split_whitespace().collect_vec();
     let mut condition = Condition::any();
-    for query in queries {
+    for &query in queries.iter() {
         condition = condition.add(model::tagged_sticker::Column::Tag.contains(query));
     }
 
-    // query sticker ids
-    let mut sticker_ids = model::tagged_sticker::Entity::find()
+    // first db query (tags -> sticker ids)
+    let mut tagged_stickers = model::tagged_sticker::Entity::find()
         .filter(condition)
         .all(&store.db)
-        .await?
+        .await?;
+
+    // sort and dedup (with count) by sticker ids
+    tagged_stickers.sort_by_key(|tagged| tagged.sticker_id);
+    let sticker_id_count_pairs: Vec<(i32, usize)> = tagged_stickers
         .into_iter()
-        .map(|tagged_sticker| tagged_sticker.sticker_id)
-        .collect_vec();
+        .dedup_by_with_count(|a, b| a.sticker_id == b.sticker_id)
+        .map(|(count, tagged)| (tagged.sticker_id, count))
+        .collect();
 
-    // sort & dedup sticker ids
-    sticker_ids.sort();
-    sticker_ids.dedup();
+    // extract sticker ids
+    let sticker_ids: Vec<i32> = sticker_id_count_pairs
+        .iter()
+        .cloned()
+        .map(|(sticker_id, _)| sticker_id)
+        .collect();
 
-    // convert sticker ids to file ids, ordered by popularity, descending
-    let sticker_file_id_pairs = model::sticker::Entity::find()
+    // Convert for later sticker_id-to-match-count lookup
+    let match_count_for_sticker_id: HashMap<_, _> = sticker_id_count_pairs.into_iter().collect();
+
+    // second db query (sticker ids -> file ids)
+    let mut sticker_file_id_pairs = model::sticker::Entity::find()
         .filter(model::sticker::Column::Id.is_in(sticker_ids))
         .order_by(model::sticker::Column::Popularity, Order::Desc)
         .all(&store.db)
@@ -576,6 +586,9 @@ async fn inline_query_handler(
         .into_iter()
         .map(|sticker| (sticker.id, sticker.file_id))
         .collect_vec();
+
+    sticker_file_id_pairs
+        .sort_by_key(|(sticker_id, _)| Reverse(match_count_for_sticker_id[sticker_id]));
 
     // The sticker id's in database is used as unique identifiers.
     // The identifiers are then used in the chosen result handler to collect usage statistics
@@ -591,9 +604,8 @@ async fn inline_query_handler(
         username = username_of_user(&update.from, "<unknown>")
     );
 
-    bot.answer_inline_query(update.id, query_responses)
-        .send()
-        .await?;
+    let answer = bot.answer_inline_query(update.id, query_responses);
+    answer.send().await?;
 
     Ok(())
 }
