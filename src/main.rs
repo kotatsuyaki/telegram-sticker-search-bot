@@ -511,7 +511,7 @@ async fn handle_register_command(
     };
 
     let _insert_res = model::user::Entity::insert(model::user::ActiveModel {
-        username: Set(username),
+        username: Set(username.clone()),
         user_id: Set(sender.id),
         allowed: Set(false),
         ..Default::default()
@@ -521,6 +521,8 @@ async fn handle_register_command(
 
     // respond to user
     reply_msg(bot, message, strings::NEED_APPROVAL).await?;
+
+    info!("User {} registered for tagging permission", username);
 
     Ok(())
 }
