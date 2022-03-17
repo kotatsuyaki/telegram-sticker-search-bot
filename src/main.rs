@@ -103,7 +103,7 @@ async fn chosen_inline_result_handler(
     let sticker_id: i32 = chosen
         .result_id
         .parse()
-        .map_err(|_| BotError::ChosenParseError)?;
+        .map_err(|_| BotError::ChosenParse)?;
 
     let sticker = model::sticker::Entity::find()
         .filter(model::sticker::Column::Id.eq(sticker_id))
@@ -128,7 +128,7 @@ async fn command_handler(
     store: Arc<DataStore>,
 ) -> Result<(), BotError> {
     let command = Command::parse(
-        message.text().ok_or(BotError::CommandParseError(None))?,
+        message.text().ok_or(BotError::CommandParse(None))?,
         "sticker_doko_bot",
     )?;
 
@@ -247,7 +247,7 @@ async fn command_handler(
                         .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
                         .one(&store.db)
                         .await?;
-                    sticker.ok_or(BotError::NoSuchStickerError)?.id
+                    sticker.ok_or(BotError::NoSuchSticker)?.id
                 }
             };
 
@@ -668,49 +668,49 @@ enum Command {
 #[derive(Debug)]
 enum BotError {
     /// Problem originated from the Telegram bot library
-    RequestError(teloxide::RequestError),
+    Request(teloxide::RequestError),
 
     /// Command parsing error
-    CommandParseError(Option<teloxide::utils::command::ParseError>),
+    CommandParse(Option<teloxide::utils::command::ParseError>),
 
     /// Problem originated from the database library
-    DatabaseError(Option<sea_orm::DbErr>),
+    Database(Option<sea_orm::DbErr>),
 
     /// Problem parsing the `result_id` field of [`ChosenInlineResult`] as a sticker ID
-    ChosenParseError,
+    ChosenParse,
 
     /// Problem inserting and finding the sticker
-    NoSuchStickerError,
+    NoSuchSticker,
 }
 
 impl From<teloxide::RequestError> for BotError {
     fn from(e: teloxide::RequestError) -> Self {
-        Self::RequestError(e)
+        Self::Request(e)
     }
 }
 
 impl From<teloxide::utils::command::ParseError> for BotError {
     fn from(e: teloxide::utils::command::ParseError) -> Self {
-        Self::CommandParseError(Some(e))
+        Self::CommandParse(Some(e))
     }
 }
 
 impl From<sea_orm::DbErr> for BotError {
     fn from(e: sea_orm::DbErr) -> Self {
-        Self::DatabaseError(Some(e))
+        Self::Database(Some(e))
     }
 }
 
 impl std::fmt::Display for BotError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RequestError(e) => write!(f, "{:?}", e),
-            Self::CommandParseError(Some(e)) => write!(f, "{:?}", e),
-            Self::CommandParseError(None) => write!(f, "CommandParseError"),
-            Self::DatabaseError(Some(e)) => write!(f, "{:?}", e),
-            Self::DatabaseError(None) => write!(f, "DatabaseError"),
-            Self::ChosenParseError => write!(f, "ChosenParseError"),
-            Self::NoSuchStickerError => write!(f, "NoSuchStickerError"),
+            Self::Request(e) => write!(f, "{:?}", e),
+            Self::CommandParse(Some(e)) => write!(f, "{:?}", e),
+            Self::CommandParse(None) => write!(f, "CommandParseError"),
+            Self::Database(Some(e)) => write!(f, "{:?}", e),
+            Self::Database(None) => write!(f, "DatabaseError"),
+            Self::ChosenParse => write!(f, "ChosenParseError"),
+            Self::NoSuchSticker => write!(f, "NoSuchStickerError"),
         }
     }
 }
@@ -718,9 +718,9 @@ impl std::fmt::Display for BotError {
 impl std::error::Error for BotError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::RequestError(e) => Some(e),
-            Self::CommandParseError(Some(e)) => Some(e),
-            Self::DatabaseError(Some(e)) => Some(e),
+            Self::Request(e) => Some(e),
+            Self::CommandParse(Some(e)) => Some(e),
+            Self::Database(Some(e)) => Some(e),
             _ => None,
         }
     }
