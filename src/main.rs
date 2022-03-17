@@ -18,6 +18,8 @@ use teloxide::{
 mod model;
 mod strings;
 
+const QUERY_RESULT_MAX: usize = 50;
+
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
     // initialize logger with sane defaults
@@ -644,6 +646,9 @@ async fn inline_query_handler(
 
     sticker_file_id_pairs
         .sort_by_key(|(sticker_id, _)| Reverse(match_count_for_sticker_id[sticker_id]));
+
+    // The bot API puts a limit on the number of inline query results allowed
+    sticker_file_id_pairs.truncate(QUERY_RESULT_MAX);
 
     // The sticker id's in database is used as unique identifiers.
     // The identifiers are then used in the chosen result handler to collect usage statistics
