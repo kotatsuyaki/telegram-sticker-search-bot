@@ -573,7 +573,13 @@ async fn handle_allow_command(
 }
 
 async fn handle_help_command(bot: Bot, message: Message) -> Result<(), BotError> {
-    reply_msg(bot, message, Command::descriptions()).await?;
+    let desc = "To search for stickers, simply tag the bot and type your keywords.";
+    reply_msg(
+        bot,
+        message,
+        format!("{desc}\n\n{cmds}", cmds = Command::descriptions()),
+    )
+    .await?;
 
     Ok(())
 }
