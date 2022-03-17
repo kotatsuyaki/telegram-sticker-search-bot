@@ -1,3 +1,5 @@
+#![allow(clippy::bool_comparison)]
+
 use std::{cmp::Reverse, collections::HashMap, env::vars, sync::Arc};
 
 use chrono::Utc;
@@ -633,14 +635,11 @@ fn username_of_message<'a>(message: &'a Message, fallback: &'a str) -> &'a str {
         .from()
         .and_then(|u| u.username.as_ref())
         .map(|s| s.as_str())
-        .unwrap_or_else(|| fallback.as_ref())
+        .unwrap_or(fallback)
 }
 
 fn username_of_user<'a>(user: &'a teloxide::types::User, fallback: &'a str) -> &'a str {
-    user.username
-        .as_ref()
-        .map(|s| s.as_str())
-        .unwrap_or_else(|| fallback.as_ref())
+    user.username.as_deref().unwrap_or(fallback)
 }
 
 #[derive(BotCommand, Debug)]
