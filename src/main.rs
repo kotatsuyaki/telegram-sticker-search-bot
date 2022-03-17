@@ -135,399 +135,446 @@ async fn command_handler(
     )?;
 
     match command {
-        Command::Tag { text } => {
-            let re_msg: &Message = match message.reply_to_message() {
-                Some(m) => m,
-                None => {
-                    info!(
-                        "/tag command by {} does not reply to a message",
-                        username_of_message(&message, "<unknown>")
-                    );
+        Command::Tag { text } => handle_tag_command(bot, message, store, text).await?,
+        Command::Untag { text } => handle_untag_command(bot, message, store, text).await?,
+        Command::ListTags => handle_list_tags_command(bot, message, store).await?,
+        Command::Register => handle_register_command(bot, message, store).await?,
+        Command::Allow { text } => handle_allow_command(bot, message, store, text).await?,
+        Command::Help => handle_help_command(bot, message).await?,
+    }
 
-                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
-                    return Ok(());
-                }
-            };
+    Ok(())
+}
 
-            // only process tag requests from known senders
-            let sender = match message.from() {
-                Some(user) => user,
-                None => {
-                    info!("Unknown user attempted to use the /tag command");
+async fn handle_tag_command(
+    bot: Bot,
+    message: Message,
+    store: Arc<DataStore>,
+    text: String,
+) -> Result<(), BotError> {
+    let re_msg: &Message = match message.reply_to_message() {
+        Some(m) => m,
+        None => {
+            info!(
+                "/tag command by {} does not reply to a message",
+                username_of_message(&message, "<unknown>")
+            );
 
-                    reply_msg(bot, message, strings::SENDER_UNKNOWN).await?;
-                    return Ok(());
-                }
-            };
+            reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
+            return Ok(());
+        }
+    };
 
-            // check if sender is known
-            let db_user = model::user::Entity::find()
-                .filter(model::user::Column::UserId.eq(sender.id))
+    // only process tag requests from known senders
+    let sender = match message.from() {
+        Some(user) => user,
+        None => {
+            info!("Unknown user attempted to use the /tag command");
+
+            reply_msg(bot, message, strings::SENDER_UNKNOWN).await?;
+            return Ok(());
+        }
+    };
+
+    // check if sender is known
+    let db_user = model::user::Entity::find()
+        .filter(model::user::Column::UserId.eq(sender.id))
+        .one(&store.db)
+        .await?;
+    let db_user = if let Some(u) = db_user {
+        u
+    } else {
+        info!(
+            "Unregistered user {} attempted to use the /tag command",
+            username_of_message(&message, "<unknown>")
+        );
+
+        reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
+        return Ok(());
+    };
+
+    // check if sender is allowed to tag
+    if db_user.allowed == false {
+        info!(
+            "Non-allowed tagger {} attempted to use the /tag command",
+            username_of_message(&message, "<unknown>")
+        );
+
+        reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
+        return Ok(());
+    }
+
+    /* Proceed to tag */
+
+    // prepare data to be inserted
+    let re_sticker: &Sticker = match re_msg.sticker() {
+        Some(s) => s,
+        None => {
+            info!(
+                "/tag command by {} does not reply to a sticker",
+                db_user.username
+            );
+
+            reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
+            return Ok(());
+        }
+    };
+
+    // ensure that there's a set name
+    let set_name = match &re_sticker.set_name {
+        Some(name) => name,
+        None => {
+            info!("Sticker {:?} does not have a sticker set", re_sticker);
+
+            reply_msg(bot, message, strings::NO_STICKER_SET).await?;
+            return Ok(());
+        }
+    };
+    let file_id = &re_sticker.file_id;
+    let file_unique_id = &re_sticker.file_unique_id;
+    let tags: Vec<_> = text.trim().split_whitespace().collect();
+
+    if tags.is_empty() {
+        info!(
+            "Tagger {} used /tag command without any tags",
+            db_user.username
+        );
+
+        reply_msg(bot, message, strings::NO_TAGS).await?;
+        return Ok(());
+    }
+
+    // ensure that the sticker is indexed
+    // NOTE: This is a workaround to implement the "insert if not exists" behavior
+    let inserted_sticker_res = model::sticker::Entity::insert(model::sticker::ActiveModel {
+        file_unique_id: Set(file_unique_id.clone()),
+        file_id: Set(file_id.clone()),
+        set_name: Set(set_name.clone()),
+        popularity: Set(0),
+        ..Default::default()
+    })
+    .exec(&store.db)
+    .await;
+
+    // get the inserted id, or else fallback to selecting
+    let sticker_id: i32 = match inserted_sticker_res {
+        Ok(sticker) => sticker.last_insert_id,
+        Err(_) => {
+            let sticker = model::sticker::Entity::find()
+                .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
                 .one(&store.db)
                 .await?;
-            let db_user = if let Some(u) = db_user {
-                u
-            } else {
-                info!(
-                    "Unregistered user {} attempted to use the /tag command",
-                    username_of_message(&message, "<unknown>")
-                );
+            sticker.ok_or(BotError::NoSuchSticker)?.id
+        }
+    };
 
-                reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
-                return Ok(());
-            };
+    // map tag strings to tag entries
+    let tagged_stickers = tags.iter().map(|tag| model::tagged_sticker::ActiveModel {
+        tag: Set(tag.to_string()),
+        sticker_id: Set(sticker_id),
+        tagger_id: Set(db_user.id),
+        ts: Set(Utc::now()),
+        ..Default::default()
+    });
 
-            // check if sender is allowed to tag
-            if db_user.allowed == false {
-                info!(
-                    "Non-allowed tagger {} attempted to use the /tag command",
-                    username_of_message(&message, "<unknown>")
-                );
+    // insert to db
+    let _insert_res = model::tagged_sticker::Entity::insert_many(tagged_stickers)
+        .exec(&store.db)
+        .await?;
 
-                reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
-                return Ok(());
-            }
-
-            /* Proceed to tag */
-
-            // prepare data to be inserted
-            let re_sticker: &Sticker = match re_msg.sticker() {
-                Some(s) => s,
-                None => {
-                    info!(
-                        "/tag command by {} does not reply to a sticker",
-                        db_user.username
-                    );
-
-                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
-                    return Ok(());
-                }
-            };
-
-            // ensure that there's a set name
-            let set_name = match &re_sticker.set_name {
-                Some(name) => name,
-                None => {
-                    info!("Sticker {:?} does not have a sticker set", re_sticker);
-
-                    reply_msg(bot, message, strings::NO_STICKER_SET).await?;
-                    return Ok(());
-                }
-            };
-            let file_id = &re_sticker.file_id;
-            let file_unique_id = &re_sticker.file_unique_id;
-            let tags: Vec<_> = text.trim().split_whitespace().collect();
-
-            if tags.is_empty() {
-                info!(
-                    "Tagger {} used /tag command without any tags",
-                    db_user.username
-                );
-
-                reply_msg(bot, message, strings::NO_TAGS).await?;
-                return Ok(());
-            }
-
-            // ensure that the sticker is indexed
-            // NOTE: This is a workaround to implement the "insert if not exists" behavior
-            let inserted_sticker_res =
-                model::sticker::Entity::insert(model::sticker::ActiveModel {
-                    file_unique_id: Set(file_unique_id.clone()),
-                    file_id: Set(file_id.clone()),
-                    set_name: Set(set_name.clone()),
-                    popularity: Set(0),
-                    ..Default::default()
-                })
-                .exec(&store.db)
-                .await;
-
-            // get the inserted id, or else fallback to selecting
-            let sticker_id: i32 = match inserted_sticker_res {
-                Ok(sticker) => sticker.last_insert_id,
-                Err(_) => {
-                    let sticker = model::sticker::Entity::find()
-                        .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
-                        .one(&store.db)
-                        .await?;
-                    sticker.ok_or(BotError::NoSuchSticker)?.id
-                }
-            };
-
-            // map tag strings to tag entries
-            let tagged_stickers = tags.iter().map(|tag| model::tagged_sticker::ActiveModel {
-                tag: Set(tag.to_string()),
-                sticker_id: Set(sticker_id),
-                tagger_id: Set(db_user.id),
-                ts: Set(Utc::now()),
-                ..Default::default()
-            });
-
-            // insert to db
-            let _insert_res = model::tagged_sticker::Entity::insert_many(tagged_stickers)
-                .exec(&store.db)
-                .await?;
-
-            info!(
+    info!(
                 "{username} tagged sticker with file_unique_id {file_unique_id} in set {set_name} with tags: {tags:?}",
                 username = db_user.username
             );
 
-            // respond to user with what's being tagged
-            let tags_joined = tags.iter().join("\n- ");
-            reply_msg(
-                bot,
-                message,
-                format!(
-                    "{prefix}\n- {tags_joined}",
-                    prefix = strings::TAGGED_STICKER
-                ),
-            )
-            .await?;
+    // respond to user with what's being tagged
+    let tags_joined = tags.iter().join("\n- ");
+    reply_msg(
+        bot,
+        message,
+        format!(
+            "{prefix}\n- {tags_joined}",
+            prefix = strings::TAGGED_STICKER
+        ),
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn handle_untag_command(
+    bot: Bot,
+    message: Message,
+    store: Arc<DataStore>,
+    text: String,
+) -> Result<(), BotError> {
+    let re_msg: &Message = match message.reply_to_message() {
+        Some(m) => m,
+        None => {
+            info!(
+                "/untag command by {} does not reply to a message",
+                username_of_message(&message, "<unknown>")
+            );
+
+            reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
+            return Ok(());
         }
-        Command::Untag { text } => {
-            let re_msg: &Message = match message.reply_to_message() {
-                Some(m) => m,
-                None => {
-                    info!(
-                        "/tag command by {} does not reply to a message",
-                        username_of_message(&message, "<unknown>")
-                    );
+    };
 
-                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
-                    return Ok(());
-                }
-            };
+    // only process tag requests from known senders
+    let sender = match message.from() {
+        Some(user) => user,
+        None => {
+            info!("Unknown user attempted to use the /untag command");
 
-            // only process tag requests from known senders
-            let sender = match message.from() {
-                Some(user) => user,
-                None => {
-                    info!("Unknown user attempted to use the /tag command");
+            reply_msg(bot, message, strings::SENDER_UNKNOWN).await?;
+            return Ok(());
+        }
+    };
 
-                    reply_msg(bot, message, strings::SENDER_UNKNOWN).await?;
-                    return Ok(());
-                }
-            };
+    // check if sender is known
+    let db_user = model::user::Entity::find()
+        .filter(model::user::Column::UserId.eq(sender.id))
+        .one(&store.db)
+        .await?;
+    let db_user = if let Some(u) = db_user {
+        u
+    } else {
+        info!(
+            "Unregistered user {} attempted to use the /untag command",
+            username_of_message(&message, "<unknown>")
+        );
 
-            // check if sender is known
-            let db_user = model::user::Entity::find()
-                .filter(model::user::Column::UserId.eq(sender.id))
-                .one(&store.db)
-                .await?;
-            let db_user = if let Some(u) = db_user {
-                u
-            } else {
-                info!(
-                    "Unregistered user {} attempted to use the /tag command",
-                    username_of_message(&message, "<unknown>")
-                );
+        reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
+        return Ok(());
+    };
 
-                reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
-                return Ok(());
-            };
+    // check if sender is allowed to tag
+    if db_user.allowed == false {
+        info!(
+            "Non-allowed tagger {} attempted to use the /untag command",
+            username_of_message(&message, "<unknown>")
+        );
 
-            // check if sender is allowed to tag
-            if db_user.allowed == false {
-                info!(
-                    "Non-allowed tagger {} attempted to use the /tag command",
-                    username_of_message(&message, "<unknown>")
-                );
+        reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
+        return Ok(());
+    }
 
-                reply_msg(bot, message, strings::TAG_NOT_AUTHORIZED).await?;
-                return Ok(());
-            }
+    /* Proceed to tag */
 
-            /* Proceed to tag */
+    // prepare data to be inserted
+    let re_sticker: &Sticker = match re_msg.sticker() {
+        Some(s) => s,
+        None => {
+            info!(
+                "/untag command by {} does not reply to a sticker",
+                db_user.username
+            );
 
-            // prepare data to be inserted
-            let re_sticker: &Sticker = match re_msg.sticker() {
-                Some(s) => s,
-                None => {
-                    info!(
-                        "/tag command by {} does not reply to a sticker",
-                        db_user.username
-                    );
+            reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
+            return Ok(());
+        }
+    };
 
-                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
-                    return Ok(());
-                }
-            };
+    let file_unique_id = &re_sticker.file_unique_id;
+    let untags: Vec<_> = text.trim().split_whitespace().collect();
 
-            let file_unique_id = &re_sticker.file_unique_id;
-            let untags: Vec<_> = text.trim().split_whitespace().collect();
-
-            let sticker = model::sticker::Entity::find()
-                .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
-                .one(&store.db)
-                .await?;
-            let sticker_id = match sticker {
-                Some(sticker) => sticker.id,
-                None => {
-                    info!("Tagger {username} used /untag against an unindexed sticker with unique id {file_unique_id}",
+    let sticker = model::sticker::Entity::find()
+        .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
+        .one(&store.db)
+        .await?;
+    let sticker_id = match sticker {
+        Some(sticker) => sticker.id,
+        None => {
+            info!("Tagger {username} used /untag against an unindexed sticker with unique id {file_unique_id}",
                     username = db_user.username);
 
-                    reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
-                    return Ok(());
-                }
-            };
+            reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
+            return Ok(());
+        }
+    };
 
-            let delete_res = model::tagged_sticker::Entity::delete_many()
-                .filter(model::tagged_sticker::Column::StickerId.eq(sticker_id))
-                .filter(model::tagged_sticker::Column::Tag.is_in(untags.clone()))
-                .exec(&store.db)
-                .await?;
+    let delete_res = model::tagged_sticker::Entity::delete_many()
+        .filter(model::tagged_sticker::Column::StickerId.eq(sticker_id))
+        .filter(model::tagged_sticker::Column::Tag.is_in(untags.clone()))
+        .exec(&store.db)
+        .await?;
 
-            info!(
+    info!(
                 "Tagger {username} removed tags {untags:?} from sticker with unique id {file_unique_id} (deleted {rows} rows)",
                 username = db_user.username, rows = delete_res.rows_affected
             );
-            reply_msg(bot, message, strings::UNTAG_SUCCESS).await?;
-        }
-        Command::ListTags => {
-            let re_msg: &Message = match message.reply_to_message() {
-                Some(m) => m,
-                None => {
-                    info!(
-                        "User {} used /listtags without replying to a sticker",
-                        username_of_message(&message, "<unknown>")
-                    );
+    reply_msg(bot, message, strings::UNTAG_SUCCESS).await?;
 
-                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
-                    return Ok(());
-                }
-            };
+    Ok(())
+}
 
-            let re_sticker: &Sticker = match re_msg.sticker() {
-                Some(s) => s,
-                None => {
-                    info!(
-                        "User {} used /listtags command without replying to a sticker",
-                        username_of_message(&message, "<unknown>")
-                    );
-
-                    reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
-                    return Ok(());
-                }
-            };
-            let file_unique_id = &re_sticker.file_unique_id;
+async fn handle_list_tags_command(
+    bot: Bot,
+    message: Message,
+    store: Arc<DataStore>,
+) -> Result<(), BotError> {
+    let re_msg: &Message = match message.reply_to_message() {
+        Some(m) => m,
+        None => {
             info!(
-                "User {username} finding sticker with unique_file_id: {file_unique_id} with /listtags",
-                username = username_of_message(&message, "<unknown>")
+                "User {} used /listtags without replying to a sticker",
+                username_of_message(&message, "<unknown>")
             );
 
-            let sticker = model::sticker::Entity::find()
-                .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
-                .one(&store.db)
-                .await?;
-            let sticker_id = match sticker {
-                Some(sticker) => sticker.id,
-                None => {
-                    info!(
+            reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
+            return Ok(());
+        }
+    };
+
+    let re_sticker: &Sticker = match re_msg.sticker() {
+        Some(s) => s,
+        None => {
+            info!(
+                "User {} used /listtags command without replying to a sticker",
+                username_of_message(&message, "<unknown>")
+            );
+
+            reply_msg(bot, message, strings::NO_REPLY_STICKER).await?;
+            return Ok(());
+        }
+    };
+    let file_unique_id = &re_sticker.file_unique_id;
+    info!(
+        "User {username} finding sticker with unique_file_id: {file_unique_id} with /listtags",
+        username = username_of_message(&message, "<unknown>")
+    );
+
+    let sticker = model::sticker::Entity::find()
+        .filter(model::sticker::Column::FileUniqueId.eq(file_unique_id.clone()))
+        .one(&store.db)
+        .await?;
+    let sticker_id = match sticker {
+        Some(sticker) => sticker.id,
+        None => {
+            info!(
                         "User {} used /listtags against an unindexed sticker with unique id {file_unique_id}",
                         username_of_message(&message, "<unknown>")
                     );
 
-                    reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
-                    return Ok(());
-                }
-            };
+            reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
+            return Ok(());
+        }
+    };
 
-            let tagged_stickers = model::tagged_sticker::Entity::find()
-                .filter(model::tagged_sticker::Column::StickerId.eq(sticker_id))
-                .all(&store.db)
-                .await?;
+    let tagged_stickers = model::tagged_sticker::Entity::find()
+        .filter(model::tagged_sticker::Column::StickerId.eq(sticker_id))
+        .all(&store.db)
+        .await?;
 
-            if tagged_stickers.is_empty() {
-                info!(
+    if tagged_stickers.is_empty() {
+        info!(
                     "User {} used /listtags against an indexed, but untagged sticker with unique id {file_unique_id}",
                     username_of_message(&message, "<unknown>")
                 );
 
-                reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
-                return Ok(());
-            }
-
-            let tags = tagged_stickers.into_iter().map(|ts| ts.tag).join(" ");
-
-            reply_msg(bot, message, format!("Tags on this sticker: {}", tags)).await?;
-        }
-        Command::Register => {
-            // only process register requests from known senders
-            let sender = match message.from() {
-                Some(user) => user,
-                None => {
-                    reply_msg(bot, message, strings::SENDER_UNKNOWN).await?;
-                    return Ok(());
-                }
-            };
-
-            // the table requires username
-            let username = if let Some(username) = &sender.username {
-                username.clone()
-            } else {
-                info!("A user {sender:?} without username attempted to register");
-
-                reply_msg(bot, message, strings::USERNAME_MISSING).await?;
-                return Ok(());
-            };
-
-            let _insert_res = model::user::Entity::insert(model::user::ActiveModel {
-                username: Set(username),
-                user_id: Set(sender.id),
-                allowed: Set(false),
-                ..Default::default()
-            })
-            .exec(&store.db)
-            .await?;
-
-            // respond to user
-            reply_msg(bot, message, strings::NEED_APPROVAL).await?;
-        }
-        Command::Allow { text } => {
-            let args = text.trim().split_whitespace().collect_vec();
-            if args.len() != 2 {
-                reply_msg(bot, message, strings::WRONG_ARGNUM).await?;
-                return Ok(());
-            }
-            let (secret, username) = (args[0], args[1]);
-
-            // verify secret
-            if secret != store.secret {
-                reply_msg(bot, message, strings::NO_PERM).await?;
-                return Ok(());
-            }
-
-            // query the username
-            let user = model::user::Entity::find()
-                .filter(model::user::Column::Username.eq(username))
-                .one(&store.db)
-                .await?;
-
-            let user = if let Some(u) = user {
-                u
-            } else {
-                reply_msg(bot, message, strings::NOT_REGISTERED).await?;
-                return Ok(());
-            };
-
-            // update the user
-            let mut user_active = user.into_active_model();
-            user_active.allowed = Set(true);
-            let updated_user = user_active.update(&store.db).await?;
-
-            format!("{:?}", updated_user);
-            reply_msg_with_parse_mode(
-                bot,
-                message,
-                Some(ParseMode::Html),
-                format!("Updated user: <code>{:?}</code>", updated_user),
-            )
-            .await?;
-        }
-        Command::Help => {
-            reply_msg(bot, message, Command::descriptions()).await?;
-        }
+        reply_msg(bot, message, strings::STICKER_UNTAGGED).await?;
+        return Ok(());
     }
+
+    let tags = tagged_stickers.into_iter().map(|ts| ts.tag).join(" ");
+
+    reply_msg(bot, message, format!("Tags on this sticker: {}", tags)).await?;
+
+    Ok(())
+}
+
+async fn handle_register_command(
+    bot: Bot,
+    message: Message,
+    store: Arc<DataStore>,
+) -> Result<(), BotError> {
+    // only process register requests from known senders
+    let sender = match message.from() {
+        Some(user) => user,
+        None => {
+            reply_msg(bot, message, strings::SENDER_UNKNOWN).await?;
+            return Ok(());
+        }
+    };
+
+    // the table requires username
+    let username = if let Some(username) = &sender.username {
+        username.clone()
+    } else {
+        info!("A user {sender:?} without username attempted to register");
+
+        reply_msg(bot, message, strings::USERNAME_MISSING).await?;
+        return Ok(());
+    };
+
+    let _insert_res = model::user::Entity::insert(model::user::ActiveModel {
+        username: Set(username),
+        user_id: Set(sender.id),
+        allowed: Set(false),
+        ..Default::default()
+    })
+    .exec(&store.db)
+    .await?;
+
+    // respond to user
+    reply_msg(bot, message, strings::NEED_APPROVAL).await?;
+
+    Ok(())
+}
+
+async fn handle_allow_command(
+    bot: Bot,
+    message: Message,
+    store: Arc<DataStore>,
+    text: String,
+) -> Result<(), BotError> {
+    let args = text.trim().split_whitespace().collect_vec();
+    if args.len() != 2 {
+        reply_msg(bot, message, strings::WRONG_ARGNUM).await?;
+        return Ok(());
+    }
+    let (secret, username) = (args[0], args[1]);
+
+    // verify secret
+    if secret != store.secret {
+        reply_msg(bot, message, strings::NO_PERM).await?;
+        return Ok(());
+    }
+
+    // query the username
+    let user = model::user::Entity::find()
+        .filter(model::user::Column::Username.eq(username))
+        .one(&store.db)
+        .await?;
+
+    let user = if let Some(u) = user {
+        u
+    } else {
+        reply_msg(bot, message, strings::NOT_REGISTERED).await?;
+        return Ok(());
+    };
+
+    // update the user
+    let mut user_active = user.into_active_model();
+    user_active.allowed = Set(true);
+    let updated_user = user_active.update(&store.db).await?;
+
+    format!("{:?}", updated_user);
+    reply_msg_with_parse_mode(
+        bot,
+        message,
+        Some(ParseMode::Html),
+        format!("Updated user: <code>{:?}</code>", updated_user),
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn handle_help_command(bot: Bot, message: Message) -> Result<(), BotError> {
+    reply_msg(bot, message, Command::descriptions()).await?;
+
     Ok(())
 }
 
