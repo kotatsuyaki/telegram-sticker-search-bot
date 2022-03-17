@@ -140,7 +140,7 @@ async fn command_handler(
         Command::ListTags => handle_list_tags_command(bot, message, store).await?,
         Command::Register => handle_register_command(bot, message, store).await?,
         Command::Allow { text } => handle_allow_command(bot, message, store, text).await?,
-        Command::Help => handle_help_command(bot, message).await?,
+        Command::Start | Command::Help => handle_help_command(bot, message).await?,
     }
 
     Ok(())
@@ -715,6 +715,9 @@ enum Command {
 
     #[command(description = "list all tags associated with a sticker")]
     ListTags,
+
+    #[command(description = "off")]
+    Start,
 }
 
 #[derive(Debug)]
