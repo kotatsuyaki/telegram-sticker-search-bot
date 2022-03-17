@@ -562,12 +562,17 @@ async fn handle_allow_command(
     user_active.allowed = Set(true);
     let updated_user = user_active.update(&store.db).await?;
 
-    format!("{:?}", updated_user);
+    info!("Allowed user {:?} to tag stickers", updated_user);
+
+    let user_str = format!("{:?}", updated_user);
     reply_msg_with_parse_mode(
         bot,
         message,
         Some(ParseMode::Html),
-        format!("Updated user: <code>{:?}</code>", updated_user),
+        format!(
+            "Updated user: <code>{:?}</code>",
+            html_escape::encode_text(&user_str)
+        ),
     )
     .await?;
 
