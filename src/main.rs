@@ -401,6 +401,7 @@ async fn handle_untag_command(
     let delete_res = model::tagged_sticker::Entity::delete_many()
         .filter(model::tagged_sticker::Column::StickerId.eq(sticker_id))
         .filter(model::tagged_sticker::Column::Tag.is_in(untags.clone()))
+        .filter(model::tagged_sticker::Column::TaggerId.eq(db_user.id))
         .exec(&store.db)
         .await?;
 
